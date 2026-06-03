@@ -7,20 +7,25 @@
 #  - (optional) installs & enables the systemd --user service for ydotoold
 #
 # Usage:
-#   ./install.sh                 # full install (CLI + rootless + systemd)
+#   ./install.sh                 # full install (CLI + rootless + systemd + skill)
 #   ./install.sh --cli-only      # just the dependency check + symlink
 #   ./install.sh --no-systemd    # rootless setup but don't enable the user service
+#   ./install.sh --no-rootless   # skip the udev/input-group/uinput setup
+#   ./install.sh --no-skill      # don't install the agent skill
+#   ./install.sh --only-skill    # install ONLY the agent skill (nothing else)
 #
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${PREFIX:-$HOME/.local/bin}"
-DO_ROOTLESS=1; DO_SYSTEMD=1
+DO_DEPS=1; DO_CLI=1; DO_ROOTLESS=1; DO_SYSTEMD=1; DO_SKILL=1
 for a in "$@"; do case "$a" in
-	--cli-only)   DO_ROOTLESS=0; DO_SYSTEMD=0 ;;
-	--no-systemd) DO_SYSTEMD=0 ;;
+	--cli-only)    DO_ROOTLESS=0; DO_SYSTEMD=0; DO_SKILL=0 ;;
+	--only-skill)  DO_DEPS=0; DO_CLI=0; DO_ROOTLESS=0; DO_SYSTEMD=0; DO_SKILL=1 ;;
+	--no-systemd)  DO_SYSTEMD=0 ;;
 	--no-rootless) DO_ROOTLESS=0 ;;
-	-h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+	--no-skill)    DO_SKILL=0 ;;
+	-h|--help) sed -n '2,17p' "$0"; exit 0 ;;
 	*) echo "unknown option: $a" >&2; exit 1 ;;
 esac; done
 
@@ -36,27 +41,31 @@ pkg_hint() {
 }
 
 # 1. Dependencies -----------------------------------------------------------
-info "Checking dependencies"
-REQ=(hyprctl grim wtype ydotool ydotoold jq awk bash)
-missing=()
-for b in "${REQ[@]}"; do
-	if command -v "$b" >/dev/null 2>&1; then ok "$b"; else err "$b missing"; missing+=("$b"); fi
-done
-if [ "${#missing[@]}" -gt 0 ]; then
-	echo
-	err "Missing: ${missing[*]}"
-	echo "    Try:  $(pkg_hint "${missing[*]}")"
-	echo "    (grim wtype ydotool jq are the usual package names; hyprctl ships with hyprland)"
-	exit 1
+if [ "$DO_DEPS" = 1 ]; then
+	info "Checking dependencies"
+	REQ=(hyprctl grim wtype ydotool ydotoold jq awk bash)
+	missing=()
+	for b in "${REQ[@]}"; do
+		if command -v "$b" >/dev/null 2>&1; then ok "$b"; else err "$b missing"; missing+=("$b"); fi
+	done
+	if [ "${#missing[@]}" -gt 0 ]; then
+		echo
+		err "Missing: ${missing[*]}"
+		echo "    Try:  $(pkg_hint "${missing[*]}")"
+		echo "    (grim wtype ydotool jq are the usual package names; hyprctl ships with hyprland)"
+		exit 1
+	fi
 fi
 
 # 2. Symlink the CLI --------------------------------------------------------
-info "Installing CLI -> $PREFIX/desktopctrl"
-mkdir -p "$PREFIX"
-chmod +x "$HERE/bin/desktopctrl"
-ln -sf "$HERE/bin/desktopctrl" "$PREFIX/desktopctrl"
-ok "linked $PREFIX/desktopctrl -> $HERE/bin/desktopctrl"
-case ":$PATH:" in *":$PREFIX:"*) ;; *) err "$PREFIX is not in PATH — add it to your shell rc" ;; esac
+if [ "$DO_CLI" = 1 ]; then
+	info "Installing CLI -> $PREFIX/desktopctrl"
+	mkdir -p "$PREFIX"
+	chmod +x "$HERE/bin/desktopctrl"
+	ln -sf "$HERE/bin/desktopctrl" "$PREFIX/desktopctrl"
+	ok "linked $PREFIX/desktopctrl -> $HERE/bin/desktopctrl"
+	case ":$PATH:" in *":$PREFIX:"*) ;; *) err "$PREFIX is not in PATH — add it to your shell rc" ;; esac
+fi
 
 # 3. Rootless uinput --------------------------------------------------------
 if [ "$DO_ROOTLESS" = 1 ]; then
@@ -93,32 +102,34 @@ if [ "$DO_SYSTEMD" = 1 ]; then
 fi
 
 # 5. Skill (for AI agents) --------------------------------------------------
-info "Installing the desktop-control skill"
-AGENTS_SKILLS="$HOME/.agents/skills"
-mkdir -p "$AGENTS_SKILLS"
-ln -sfn "$HERE/skill" "$AGENTS_SKILLS/desktop-control"
-ok "master: $AGENTS_SKILLS/desktop-control -> $HERE/skill"
+if [ "$DO_SKILL" = 1 ]; then
+	info "Installing the desktop-control skill"
+	AGENTS_SKILLS="$HOME/.agents/skills"
+	mkdir -p "$AGENTS_SKILLS"
+	ln -sfn "$HERE/skill" "$AGENTS_SKILLS/desktop-control"
+	ok "master: $AGENTS_SKILLS/desktop-control -> $HERE/skill"
 
-# Symlink the master skill into every present agent's skills dir. Only agents
-# whose config dir already exists are touched. Override the list with
-# DESKTOPCTRL_SKILL_DIRS="dir1 dir2 ...".
-default_skill_dirs=(
-	"$HOME/.claude/skills"            # Claude Code
-	"$HOME/.config/opencode/skills"  # opencode
-	"$HOME/.cursor/skills"           # Cursor
-	"$HOME/.codex/skills"            # Codex
-	"$HOME/.gemini/skills"           # Gemini CLI
-)
-read -ra skill_dirs <<< "${DESKTOPCTRL_SKILL_DIRS:-${default_skill_dirs[*]}}"
-for d in "${skill_dirs[@]}"; do
-	[ "$d" = "$AGENTS_SKILLS" ] && continue
-	[ -d "$(dirname "$d")" ] || continue          # agent not installed -> skip
-	mkdir -p "$d"
-	target="$d/desktop-control"
-	[ -e "$target" ] && [ ! -L "$target" ] && rm -rf "$target"   # replace a real dir
-	ln -sfn "$AGENTS_SKILLS/desktop-control" "$target"
-	ok "linked $target"
-done
+	# Symlink the master skill into every present agent's skills dir. Only agents
+	# whose config dir already exists are touched. Override the list with
+	# DESKTOPCTRL_SKILL_DIRS="dir1 dir2 ...".
+	default_skill_dirs=(
+		"$HOME/.claude/skills"            # Claude Code
+		"$HOME/.config/opencode/skills"  # opencode
+		"$HOME/.cursor/skills"           # Cursor
+		"$HOME/.codex/skills"            # Codex
+		"$HOME/.gemini/skills"           # Gemini CLI
+	)
+	read -ra skill_dirs <<< "${DESKTOPCTRL_SKILL_DIRS:-${default_skill_dirs[*]}}"
+	for d in "${skill_dirs[@]}"; do
+		[ "$d" = "$AGENTS_SKILLS" ] && continue
+		[ -d "$(dirname "$d")" ] || continue          # agent not installed -> skip
+		mkdir -p "$d"
+		target="$d/desktop-control"
+		[ -e "$target" ] && [ ! -L "$target" ] && rm -rf "$target"   # replace a real dir
+		ln -sfn "$AGENTS_SKILLS/desktop-control" "$target"
+		ok "linked $target"
+	done
+fi
 
 echo
 info "Done. Validate with:  desktopctrl doctor"

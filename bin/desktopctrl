@@ -139,23 +139,48 @@ case "$cmd" in
 		hyprctl dispatch killactive >/dev/null ;;
 
 	daemon|start-daemon|daemon-start)
-		if pgrep -x ydotoold >/dev/null 2>&1 && [ -S "$YDOTOOL_SOCKET" ]; then
+		if pgrep -x ydotoold >/dev/null 2>&1; then
 			echo "ydotoold already running (socket $YDOTOOL_SOCKET)"; exit 0
 		fi
-		# Prefer the systemd --user service if installed (set up by install.sh).
+		# Canonical socket — same path the systemd unit uses (%t/.ydotool_socket).
+		DAEMON_SOCK="$RUNTIME_DIR/.ydotool_socket"
+		started=""
+		# 1) systemd --user service, if installed. Clear any failed/limit state,
+		#    start it, and only trust it if it actually becomes ACTIVE.
 		if systemctl --user cat ydotoold.service >/dev/null 2>&1; then
-			systemctl --user start ydotoold.service && echo "started via systemd --user"
-		elif [ -w /dev/uinput ]; then
-			echo "starting ydotoold (rootless)..."
-			nohup ydotoold -p "$YDOTOOL_SOCKET" -P 0600 >/tmp/ydotoold.log 2>&1 & disown 2>/dev/null || true
-		else
-			echo "starting ydotoold (sudo needed for /dev/uinput)..."
-			sudo -v || die "sudo authentication failed"
-			sudo nohup ydotoold -p "$YDOTOOL_SOCKET" -P 0666 >/tmp/ydotoold.log 2>&1 & disown 2>/dev/null || true
+			systemctl --user reset-failed ydotoold.service >/dev/null 2>&1 || true
+			systemctl --user start ydotoold.service >/dev/null 2>&1 || true
+			sleep 0.5
+			if systemctl --user is-active --quiet ydotoold.service; then
+				started="systemd --user"
+			else
+				echo "systemd service didn't start (usually /dev/uinput access) — falling back" >&2
+			fi
 		fi
-		for _ in $(seq 1 25); do [ -S "$YDOTOOL_SOCKET" ] && break; sleep 0.2; done
-		[ -S "$YDOTOOL_SOCKET" ] && echo "ydotoold ready: $YDOTOOL_SOCKET" \
-			|| die "failed to start (see /tmp/ydotoold.log or: systemctl --user status ydotoold)" ;;
+		# 2) Fallback: rootless if /dev/uinput is writable, else sudo.
+		if [ -z "$started" ]; then
+			if [ -w /dev/uinput ]; then
+				nohup ydotoold -p "$DAEMON_SOCK" -P 0600 >/tmp/ydotoold.log 2>&1 & disown 2>/dev/null || true
+				started="rootless"
+			else
+				echo "starting ydotoold (sudo needed for /dev/uinput)..."
+				sudo -v || die "sudo authentication failed"
+				sudo rm -f /tmp/.ydotool_socket 2>/dev/null || true   # drop stale legacy socket
+				sudo nohup ydotoold -p "$DAEMON_SOCK" -P 0666 >/tmp/ydotoold.log 2>&1 & disown 2>/dev/null || true
+				started="sudo"
+			fi
+		fi
+		YDOTOOL_SOCKET="$DAEMON_SOCK"; export YDOTOOL_SOCKET
+		# Verify: a live process AND its socket — not just a (possibly stale) file.
+		for _ in $(seq 1 25); do
+			pgrep -x ydotoold >/dev/null 2>&1 && [ -S "$YDOTOOL_SOCKET" ] && break
+			sleep 0.2
+		done
+		if pgrep -x ydotoold >/dev/null 2>&1 && [ -S "$YDOTOOL_SOCKET" ]; then
+			echo "ydotoold ready ($started): $YDOTOOL_SOCKET"
+		else
+			die "ydotoold failed to start (see /tmp/ydotoold.log, or: systemctl --user status ydotoold). If you just ran install.sh, log out and back in so the 'input' group applies."
+		fi ;;
 
 	daemon-stop|stop-daemon)
 		if systemctl --user cat ydotoold.service >/dev/null 2>&1 \
