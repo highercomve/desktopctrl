@@ -32,11 +32,20 @@ stays a clean MCP stream). Subsequent runs start instantly.
 
 ## Register with Claude Code
 
-Point Claude Code at `run.sh` — no manual venv step needed. Pass
-`DESKTOPCTRL_BIN` if the CLI isn't on PATH.
+The top-level [`install.sh`](../install.sh) does this for you (step 6: `claude mcp
+add desktopctrl …` at **user** scope, so it's available in every project). To
+register *only* the MCP server without the rest of the install:
 
 ```bash
-claude mcp add desktopctrl \
+./install.sh --only-mcp                  # user scope (default)
+./install.sh --only-mcp --mcp-scope local  # or local / project
+```
+
+To do it by hand — point Claude Code at `run.sh` (no manual venv step needed; pass
+`DESKTOPCTRL_BIN` if the CLI isn't on PATH):
+
+```bash
+claude mcp add desktopctrl -s user \
   --env DESKTOPCTRL_BIN="$HOME/.local/bin/desktopctrl" \
   -- /home/projects/personal/desktopctrl/mcp/run.sh
 ```

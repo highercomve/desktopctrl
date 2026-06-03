@@ -55,10 +55,16 @@ cd desktopctrl
    session,
 5. install the **desktop-control agent skill** to `~/.agents/skills/desktop-control`
    and symlink it into every detected AI agent's skills dir (Claude Code, opencode,
-   Cursor, …).
+   Cursor, …),
+6. register the **MCP server** with Claude Code (`claude mcp add desktopctrl …` at
+   user scope, so it's available in every project) — just like installing
+   [playwright-mcp](https://github.com/microsoft/playwright-mcp). Reconnect Claude
+   Code afterwards and call the `daemon_status` tool to verify.
 
 Flags: `--cli-only` (just deps + symlink), `--no-systemd`, `--no-rootless`,
-`--no-skill` (skip the agent skill), `--only-skill` (install *only* the skill).
+`--no-skill` (skip the agent skill), `--no-mcp` (skip MCP registration),
+`--only-skill` (install *only* the skill), `--only-mcp` (register *only* the MCP
+server), `--mcp-scope <local|user|project>` (MCP config scope, default `user`).
 
 > After the first install you must **reboot** (or `loginctl terminate-user
 > $USER` and log back in) so the `systemd --user` session picks up the new
