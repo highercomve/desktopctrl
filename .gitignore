@@ -1,0 +1,8 @@
+# python
+mcp/.venv/
+__pycache__/
+*.pyc
+
+# local test artifacts
+*.png
+/tmp_*

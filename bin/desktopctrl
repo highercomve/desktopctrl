@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+#
+# desktopctrl — unified desktop control for Hyprland/Wayland.
+# Wraps grim (screenshot), ydotool (mouse), wtype (keyboard), hyprctl (windows).
+#
+# Coordinates are LOGICAL pixels (same space as `hyprctl cursorpos` and a scale=1
+# grim screenshot). ydotool's absolute axis is offset by a divisor (default 2,
+# refined by `calibrate`), applied internally so callers always use logical px.
+#
+# Project: https://github.com/  (local: /home/projects/personal/desktopctrl)
+# Run `desktopctrl doctor` to validate the environment.
+#
+set -euo pipefail
+
+VERSION="0.2.0"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+SHOT_DIR="${DESKTOPCTRL_SHOT_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/desktopctrl}"
+CALIB_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/desktopctrl/divisor"
+
+# Resolve the ydotool socket: explicit env, then the systemd-user runtime path,
+# then the legacy /tmp path. Prefer one that already exists.
+resolve_socket() {
+	if [ -n "${YDOTOOL_SOCKET:-}" ] && [ -S "${YDOTOOL_SOCKET}" ]; then
+		printf '%s' "$YDOTOOL_SOCKET"; return
+	fi
+	local s
+	for s in "${YDOTOOL_SOCKET:-}" "$RUNTIME_DIR/.ydotool_socket" /tmp/.ydotool_socket; do
+		[ -n "$s" ] && [ -S "$s" ] && { printf '%s' "$s"; return; }
+	done
+	printf '%s' "${YDOTOOL_SOCKET:-$RUNTIME_DIR/.ydotool_socket}"
+}
+YDOTOOL_SOCKET="$(resolve_socket)"; export YDOTOOL_SOCKET
+
+bin() { command -v "$1" 2>/dev/null || echo "/usr/bin/$1"; }
+YDOTOOL="$(bin ydotool)"; GRIM="$(bin grim)"; WTYPE="$(bin wtype)"
+
+die() { echo "desktopctrl: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1 (run: desktopctrl doctor)"; }
+div() { [ -f "$CALIB_FILE" ] && cat "$CALIB_FILE" || echo 2; }
+yx()  { awk -v v="$1" -v d="$(div)" 'BEGIN{printf "%d", (v/d)+0.5}'; }
+
+btn_code() {
+	case "${1:-left}" in
+		left) echo 0xC0 ;; right) echo 0xC1 ;; middle) echo 0xC2 ;; *) echo "$1" ;;
+	esac
+}
+_move() { "$YDOTOOL" mousemove --absolute --xpos "$(yx "$1")" --ypos "$(yx "$2")"; }
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+
+	screenshot|shot)
+		need grim; mkdir -p "$SHOT_DIR"
+		out="${1:-$SHOT_DIR/shot-$(date +%s).png}"
+		"$GRIM" "$out"; echo "$out" ;;
+
+	shot-window|shotw)
+		need grim; need jq; need hyprctl; mkdir -p "$SHOT_DIR"
+		out="${1:-$SHOT_DIR/window-$(date +%s).png}"
+		geo=$(hyprctl activewindow -j | jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"')
+		"$GRIM" -g "$geo" "$out"; echo "$out" ;;
+
+	mousemove|move)
+		[ $# -ge 2 ] || die "usage: move <x> <y>"; _move "$1" "$2" ;;
+
+	click)
+		"$YDOTOOL" click "$(btn_code "${1:-left}")" >/dev/null ;;
+
+	moveclick)
+		[ $# -ge 2 ] || die "usage: moveclick <x> <y> [left|right|middle]"
+		_move "$1" "$2"; sleep 0.15
+		"$YDOTOOL" click "$(btn_code "${3:-left}")" >/dev/null ;;
+
+	doubleclick|dblclick)
+		[ $# -ge 2 ] || die "usage: doubleclick <x> <y>"
+		_move "$1" "$2"; sleep 0.12
+		"$YDOTOOL" click 0xC0 >/dev/null; sleep 0.05; "$YDOTOOL" click 0xC0 >/dev/null ;;
+
+	drag)
+		[ $# -ge 4 ] || die "usage: drag <x1> <y1> <x2> <y2>"
+		_move "$1" "$2"; sleep 0.12
+		"$YDOTOOL" click 0x40 >/dev/null; sleep 0.1     # left DOWN
+		_move "$3" "$4"; sleep 0.12
+		"$YDOTOOL" click 0x80 >/dev/null ;;              # left UP
+
+	type)
+		[ $# -ge 1 ] || die "usage: type <text...>"; need wtype; "$WTYPE" -- "$*" ;;
+
+	key)
+		[ $# -ge 1 ] || die "usage: key <combo>   e.g. ctrl+l, Return, alt+Tab"
+		need wtype
+		IFS='+' read -ra P <<< "$1"
+		n=${#P[@]}; key="${P[$((n-1))]}"; args=()
+		for ((i=0; i<n-1; i++)); do args+=(-M "${P[$i]}"); done
+		args+=(-k "$key")
+		for ((i=n-2; i>=0; i--)); do args+=(-m "${P[$i]}"); done
+		"$WTYPE" "${args[@]}" ;;
+
+	cursorpos|pos)
+		hyprctl cursorpos ;;
+
+	windows|clients|ls)
+		need jq
+		hyprctl clients -j | jq -r '
+			sort_by(.focusHistoryID)[] | select(.mapped)
+			| "\(if .focusHistoryID==0 then "*" else " " end) ws=\(.workspace.id)  \(.class)  @\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])  \(.address)  \(.title[0:48])"' ;;
+
+	activewindow|active)
+		need jq
+		hyprctl activewindow -j | jq -r '"\(.class) | \(.title) | at \(.at) size \(.size) | \(.address)"' ;;
+
+	locate)
+		[ $# -ge 1 ] || die "usage: locate <substr>"; need jq
+		hyprctl clients -j | jq -r --arg q "$(echo "$1" | tr 'A-Z' 'a-z')" '
+			[ .[] | select(.mapped)
+			   | select((.class|ascii_downcase|contains($q)) or (.title|ascii_downcase|contains($q))) ][0]
+			| if . == null then "" else "\(.at[0] + (.size[0]/2|floor)) \(.at[1] + (.size[1]/2|floor))" end' ;;
+
+	focus)
+		[ $# -ge 1 ] || die "usage: focus <class:..|title:..|address:0x..|substr>"; need jq
+		case "$1" in
+			address:*|class:*|title:*|pid:*) hyprctl dispatch focuswindow "$1" >/dev/null ;;
+			*)
+				addr=$(hyprctl clients -j | jq -r --arg q "$(echo "$1" | tr 'A-Z' 'a-z')" '
+					[ .[] | select(.mapped)
+					   | select((.class|ascii_downcase|contains($q)) or (.title|ascii_downcase|contains($q))) ][0].address // empty')
+				[ -n "$addr" ] || die "no window matching: $1"
+				hyprctl dispatch focuswindow "address:$addr" >/dev/null ;;
+		esac
+		hyprctl activewindow -j | jq -r '"focused: \(.class) | \(.title[0:50])"' ;;
+
+	exec|launch)
+		[ $# -ge 1 ] || die "usage: exec <cmd...>"; hyprctl dispatch exec "$*" >/dev/null ;;
+
+	workspace|ws)
+		[ $# -ge 1 ] || die "usage: workspace <id>"; hyprctl dispatch workspace "$1" >/dev/null ;;
+
+	close|killactive)
+		hyprctl dispatch killactive >/dev/null ;;
+
+	daemon|start-daemon|daemon-start)
+		if pgrep -x ydotoold >/dev/null 2>&1 && [ -S "$YDOTOOL_SOCKET" ]; then
+			echo "ydotoold already running (socket $YDOTOOL_SOCKET)"; exit 0
+		fi
+		# Prefer the systemd --user service if installed (set up by install.sh).
+		if systemctl --user cat ydotoold.service >/dev/null 2>&1; then
+			systemctl --user start ydotoold.service && echo "started via systemd --user"
+		elif [ -w /dev/uinput ]; then
+			echo "starting ydotoold (rootless)..."
+			nohup ydotoold -p "$YDOTOOL_SOCKET" -P 0600 >/tmp/ydotoold.log 2>&1 & disown 2>/dev/null || true
+		else
+			echo "starting ydotoold (sudo needed for /dev/uinput)..."
+			sudo -v || die "sudo authentication failed"
+			sudo nohup ydotoold -p "$YDOTOOL_SOCKET" -P 0666 >/tmp/ydotoold.log 2>&1 & disown 2>/dev/null || true
+		fi
+		for _ in $(seq 1 25); do [ -S "$YDOTOOL_SOCKET" ] && break; sleep 0.2; done
+		[ -S "$YDOTOOL_SOCKET" ] && echo "ydotoold ready: $YDOTOOL_SOCKET" \
+			|| die "failed to start (see /tmp/ydotoold.log or: systemctl --user status ydotoold)" ;;
+
+	daemon-stop|stop-daemon)
+		if systemctl --user cat ydotoold.service >/dev/null 2>&1 \
+		   && systemctl --user is-active ydotoold.service >/dev/null 2>&1; then
+			systemctl --user stop ydotoold.service && echo "stopped (systemd --user)"
+		elif pgrep -x ydotoold >/dev/null 2>&1; then
+			sudo pkill -x ydotoold 2>/dev/null || pkill -x ydotoold 2>/dev/null || true
+			echo "stopped"
+		else echo "not running"; fi ;;
+
+	daemon-status)
+		if pgrep -x ydotoold >/dev/null 2>&1; then
+			s="MISSING"; [ -S "$YDOTOOL_SOCKET" ] && s="present"
+			echo "running (pid $(pgrep -x ydotoold | tr '\n' ' ')) socket=$YDOTOOL_SOCKET ($s)"
+		else echo "not running"; fi ;;
+
+	calibrate)
+		need awk
+		"$YDOTOOL" mousemove --absolute --xpos 500 --ypos 500; sleep 0.3
+		read -r cx cy < <(hyprctl cursorpos | tr -d ',')
+		d=$(awk -v c="$cx" 'BEGIN{printf "%.4g", c/500}')
+		mkdir -p "$(dirname "$CALIB_FILE")"; echo "$d" > "$CALIB_FILE"
+		echo "calibrated: ydotool = logical / $d  (sent 500 -> cursor at $cx,$cy)" ;;
+
+	doctor|check)
+		# Validate the environment. Exit non-zero if any hard requirement fails.
+		fail=0
+		ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
+		bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; fail=1; }
+		warn() { printf '  \033[33m!\033[0m %s\n' "$*"; }
+		echo "desktopctrl $VERSION — environment check"
+		echo "Session:"
+		[ -n "${WAYLAND_DISPLAY:-}" ] && ok "Wayland (WAYLAND_DISPLAY=$WAYLAND_DISPLAY)" || bad "not a Wayland session (WAYLAND_DISPLAY unset)"
+		[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && ok "Hyprland session" || warn "HYPRLAND_INSTANCE_SIGNATURE unset (window cmds may fail)"
+		echo "Dependencies:"
+		for b in hyprctl grim wtype ydotool ydotoold jq awk; do
+			p="$(command -v "$b" 2>/dev/null || true)"
+			[ -n "$p" ] && ok "$b ($p)" || bad "$b NOT found"
+		done
+		echo "Input (ydotool needs /dev/uinput):"
+		if [ -w /dev/uinput ]; then ok "/dev/uinput writable (rootless ydotoold works)"
+		elif [ -e /dev/uinput ]; then warn "/dev/uinput exists but not writable — needs sudo, or run install.sh for rootless setup"
+		else bad "/dev/uinput missing — load module: sudo modprobe uinput"; fi
+		id -nG 2>/dev/null | tr ' ' '\n' | grep -qx input && ok "user in 'input' group" || warn "user not in 'input' group (needed for rootless)"
+		echo "Daemon:"
+		if pgrep -x ydotoold >/dev/null 2>&1; then ok "ydotoold running"; else bad "ydotoold not running (desktopctrl daemon)"; fi
+		[ -S "$YDOTOOL_SOCKET" ] && ok "socket $YDOTOOL_SOCKET" || bad "socket missing: $YDOTOOL_SOCKET"
+		echo "Calibration:"
+		ok "divisor=$(div) ($([ -f "$CALIB_FILE" ] && echo "from $CALIB_FILE" || echo default))"
+		if command -v hyprctl >/dev/null 2>&1; then
+			echo "Monitors:"
+			hyprctl monitors -j 2>/dev/null | jq -r '.[] | "  \(.name) \(.width)x\(.height)@\(.scale) (\(.x),\(.y))"' 2>/dev/null || true
+		fi
+		[ "$fail" = 0 ] && echo "RESULT: ready ✓" || echo "RESULT: not ready ✗"
+		exit "$fail" ;;
+
+	version|--version|-v)
+		echo "desktopctrl $VERSION" ;;
+
+	help|--help|-h|*)
+		cat <<'USAGE'
+desktopctrl — Hyprland/Wayland desktop control (grim/ydotool/wtype/hyprctl)
+Coordinates are LOGICAL pixels (match `cursorpos` and a scale=1 screenshot).
+
+  screenshot [path]            full screen -> png (prints path)
+  shot-window [path]           active window -> png
+  move <x> <y>                 move cursor
+  click [left|right|middle]    click at current position
+  moveclick <x> <y> [btn]      move then click
+  doubleclick <x> <y>
+  drag <x1> <y1> <x2> <y2>
+  type <text...>               type text
+  key <combo>                  e.g. ctrl+l, Return, Escape, alt+Tab
+  cursorpos                    print cursor position
+  windows                      list mapped windows (focused marked *)
+  activewindow                 focused window info
+  locate <substr>              print centre "x y" of a matching window
+  focus <match>                focus window (class:/title:/address:/substr)
+  exec <cmd...>                launch an app
+  workspace <id> | close
+  daemon                       start ydotoold (systemd --user, rootless, or sudo)
+  daemon-stop | daemon-status
+  calibrate                    derive the ydotool coordinate divisor
+  doctor                       validate the environment (exit non-zero if not ready)
+  version
+USAGE
+		;;
+esac

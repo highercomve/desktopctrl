@@ -1,0 +1,4 @@
+# Allow members of the "input" group to use /dev/uinput so ydotoold can run
+# rootless (as a systemd --user service) instead of needing sudo.
+# Installed to /etc/udev/rules.d/99-uinput.rules by install.sh.
+KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"
