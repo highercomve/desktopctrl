@@ -154,20 +154,34 @@ case "$cmd" in
 			if systemctl --user is-active --quiet ydotoold.service; then
 				started="systemd --user"
 			else
+				# Stop the unit so its Restart= policy can't keep relaunching in the
+				# background. A failed start storms input-device add/remove events,
+				# which can drop Hyprland's bars and keybinds. Halt it before we
+				# fall back or advise.
+				systemctl --user stop ydotoold.service >/dev/null 2>&1 || true
+				systemctl --user reset-failed ydotoold.service >/dev/null 2>&1 || true
 				echo "systemd service didn't start (usually /dev/uinput access) — falling back" >&2
 			fi
 		fi
-		# 2) Fallback: rootless if /dev/uinput is writable, else sudo.
+		# 2) Fallback. Prefer rootless. NEVER auto-escalate to a root daemon: a
+		#    root ydotoold creates an unmanaged virtual input device that can
+		#    perturb the compositor, and the usual cause of "in input group but
+		#    can't write /dev/uinput" is a session that predates the group change
+		#    — which a reboot/relogin fixes properly. sudo is opt-in only.
 		if [ -z "$started" ]; then
 			if [ -w /dev/uinput ]; then
 				nohup ydotoold -p "$DAEMON_SOCK" -P 0600 >/tmp/ydotoold.log 2>&1 & disown 2>/dev/null || true
 				started="rootless"
-			else
-				echo "starting ydotoold (sudo needed for /dev/uinput)..."
+			elif [ "${DESKTOPCTRL_SUDO:-0}" = 1 ]; then
+				echo "starting ydotoold (sudo, forced via DESKTOPCTRL_SUDO=1)..."
 				sudo -v || die "sudo authentication failed"
 				sudo rm -f /tmp/.ydotool_socket 2>/dev/null || true   # drop stale legacy socket
 				sudo nohup ydotoold -p "$DAEMON_SOCK" -P 0666 >/tmp/ydotoold.log 2>&1 & disown 2>/dev/null || true
 				started="sudo"
+			elif id -nG 2>/dev/null | tr ' ' '\n' | grep -qx input; then
+				die "you're in the 'input' group but this session can't access /dev/uinput — the user session (systemd --user manager) predates the group change. REBOOT (or: loginctl terminate-user $USER, then log back in), then run 'desktopctrl daemon'. To force a one-off root daemon instead: DESKTOPCTRL_SUDO=1 desktopctrl daemon"
+			else
+				die "no /dev/uinput access. Run ./install.sh for rootless setup (udev rule + 'input' group), then REBOOT. Or force a root daemon: DESKTOPCTRL_SUDO=1 desktopctrl daemon"
 			fi
 		fi
 		YDOTOOL_SOCKET="$DAEMON_SOCK"; export YDOTOOL_SOCKET

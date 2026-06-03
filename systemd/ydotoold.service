@@ -2,14 +2,21 @@
 Description=ydotool daemon (user) for desktopctrl
 Documentation=man:ydotoold(8)
 After=graphical-session.target
+# Hard cap: at most 2 restarts per 60s, then give up cleanly instead of storming.
+StartLimitIntervalSec=60
+StartLimitBurst=2
 
 [Service]
 Type=simple
 # Socket lives in the per-user runtime dir (%t = $XDG_RUNTIME_DIR, /run/user/<uid>).
 # desktopctrl resolves this path automatically.
 ExecStart=/usr/bin/ydotoold -p %t/.ydotool_socket -P 0600
-Restart=on-failure
-RestartSec=2
+# Restart ONLY on an unexpected crash of a previously-working daemon — never on a
+# startup failure. A failure here almost always means no /dev/uinput access (the
+# systemd --user manager predates the 'input' group membership); restart-looping
+# that churns input devices and can drop Hyprland's bars/keybinds mid-storm.
+Restart=on-abnormal
+RestartSec=5
 
 [Install]
 WantedBy=default.target

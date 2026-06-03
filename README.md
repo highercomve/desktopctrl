@@ -57,20 +57,29 @@ cd desktopctrl
    and symlink it into every detected AI agent's skills dir (Claude Code, opencode,
    Cursor, …).
 
-Flags: `--cli-only` (just deps + symlink), `--no-systemd`, `--no-rootless`.
+Flags: `--cli-only` (just deps + symlink), `--no-systemd`, `--no-rootless`,
+`--no-skill` (skip the agent skill), `--only-skill` (install *only* the skill).
 
-> After the first install you may need to **log out/in** (or `newgrp input`) for
-> the `input` group to apply. Then run `desktopctrl doctor`.
+> After the first install you must **reboot** (or `loginctl terminate-user
+> $USER` and log back in) so the `systemd --user` session picks up the new
+> `input` group membership — a `newgrp input` shell alone won't fix the user
+> manager's `/dev/uinput` access. Then run `desktopctrl doctor`.
 
 ### ydotoold without the rootless setup
 
-If you skip the rootless setup, start the daemon manually (needs sudo for
-`/dev/uinput`):
+`desktopctrl daemon` prefers the `systemd --user` service, then a **rootless**
+daemon if `/dev/uinput` is writable. It will **never auto-escalate to root** —
+a root `ydotoold` creates an unmanaged virtual input device that can perturb the
+compositor (dropped bars/keybinds). If you really need a one-off root daemon,
+opt in explicitly:
 
 ```bash
-desktopctrl daemon          # uses systemd --user if installed, else sudo
+DESKTOPCTRL_SUDO=1 desktopctrl daemon
 # equivalent: sudo ydotoold -p /tmp/.ydotool_socket -P 0666 &
 ```
+
+If you're already in the `input` group but still get a `/dev/uinput` access
+error, your session predates the group change — **reboot** and try again.
 
 `desktopctrl` finds the socket automatically (`$YDOTOOL_SOCKET`, then
 `$XDG_RUNTIME_DIR/.ydotool_socket`, then `/tmp/.ydotool_socket`).
@@ -153,7 +162,8 @@ mcp/                      FastMCP server (run.sh bootstraps venv + deps)
   `ydotool` isn't installed — `desktopctrl daemon` / `doctor`.
 - *Clicks land in the wrong place*: `desktopctrl calibrate`.
 - *Mouse does nothing*: `ydotoold` isn't running, or `/dev/uinput` isn't
-  accessible — re-run `./install.sh` or start the daemon with sudo.
+  accessible — re-run `./install.sh` and **reboot**, or force a root daemon with
+  `DESKTOPCTRL_SUDO=1 desktopctrl daemon`.
 
 ## License
 

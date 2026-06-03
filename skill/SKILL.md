@@ -17,10 +17,12 @@ environment is ready.
    filesystem snapshot, so sandboxed calls fail with "No such file or directory".
 
 2. **`ydotoold` must be running.** Check `desktopctrl daemon-status`. If it says
-   "not running" and the rootless setup isn't done, starting it needs root for
-   `/dev/uinput` and the agent usually cannot sudo — ask the user to run
-   `desktopctrl daemon` themselves (or `./install.sh` once for a persistent
-   `systemd --user` daemon). Mouse/keyboard tools don't work without it.
+   "not running", ask the user to run `desktopctrl daemon` themselves (or
+   `./install.sh` once for a persistent rootless `systemd --user` daemon, then
+   **reboot**). `desktopctrl daemon` never auto-escalates to root — if `/dev/uinput`
+   is inaccessible it tells the user how to fix it (reboot after install, or opt
+   into a root daemon with `DESKTOPCTRL_SUDO=1 desktopctrl daemon`). Don't try to
+   sudo it yourself. Mouse/keyboard tools don't work without the daemon.
 
 ## Coordinate model
 
