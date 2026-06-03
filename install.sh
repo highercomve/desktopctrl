@@ -92,6 +92,34 @@ if [ "$DO_SYSTEMD" = 1 ]; then
 	fi
 fi
 
+# 5. Skill (for AI agents) --------------------------------------------------
+info "Installing the desktop-control skill"
+AGENTS_SKILLS="$HOME/.agents/skills"
+mkdir -p "$AGENTS_SKILLS"
+ln -sfn "$HERE/skill" "$AGENTS_SKILLS/desktop-control"
+ok "master: $AGENTS_SKILLS/desktop-control -> $HERE/skill"
+
+# Symlink the master skill into every present agent's skills dir. Only agents
+# whose config dir already exists are touched. Override the list with
+# DESKTOPCTRL_SKILL_DIRS="dir1 dir2 ...".
+default_skill_dirs=(
+	"$HOME/.claude/skills"            # Claude Code
+	"$HOME/.config/opencode/skills"  # opencode
+	"$HOME/.cursor/skills"           # Cursor
+	"$HOME/.codex/skills"            # Codex
+	"$HOME/.gemini/skills"           # Gemini CLI
+)
+read -ra skill_dirs <<< "${DESKTOPCTRL_SKILL_DIRS:-${default_skill_dirs[*]}}"
+for d in "${skill_dirs[@]}"; do
+	[ "$d" = "$AGENTS_SKILLS" ] && continue
+	[ -d "$(dirname "$d")" ] || continue          # agent not installed -> skip
+	mkdir -p "$d"
+	target="$d/desktop-control"
+	[ -e "$target" ] && [ ! -L "$target" ] && rm -rf "$target"   # replace a real dir
+	ln -sfn "$AGENTS_SKILLS/desktop-control" "$target"
+	ok "linked $target"
+done
+
 echo
 info "Done. Validate with:  desktopctrl doctor"
 [ "${NEED_RELOGIN:-0}" = 1 ] && echo "  NOTE: log out/in (or run 'newgrp input') so the input-group membership applies, then 'desktopctrl daemon'."

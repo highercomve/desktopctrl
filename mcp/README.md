@@ -20,26 +20,25 @@ Coordinates are **logical pixels** — the same space a `screenshot` is captured
 in. Typical loop: `screenshot` → find the target → `moveclick x y` → `screenshot`
 to verify.
 
-## Setup
+## Run it
+
+[`run.sh`](run.sh) self-bootstraps — on first run it creates a venv, installs
+dependencies, then execs the server (all setup output goes to stderr so stdout
+stays a clean MCP stream). Subsequent runs start instantly.
 
 ```bash
-cd /home/projects/personal/desktopctrl/mcp
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-# sanity check
-.venv/bin/python -c "import desktopctrl_mcp"
+./run.sh        # creates .venv, installs deps, runs the server over stdio
 ```
 
 ## Register with Claude Code
 
-Point Claude Code at the venv's Python and the server script. Pass
+Point Claude Code at `run.sh` — no manual venv step needed. Pass
 `DESKTOPCTRL_BIN` if the CLI isn't on PATH.
 
 ```bash
 claude mcp add desktopctrl \
   --env DESKTOPCTRL_BIN="$HOME/.local/bin/desktopctrl" \
-  -- /home/projects/personal/desktopctrl/mcp/.venv/bin/python \
-     /home/projects/personal/desktopctrl/mcp/desktopctrl_mcp.py
+  -- /home/projects/personal/desktopctrl/mcp/run.sh
 ```
 
 Or add it to your MCP config (`~/.claude.json` or project settings) manually:
@@ -48,8 +47,7 @@ Or add it to your MCP config (`~/.claude.json` or project settings) manually:
 {
   "mcpServers": {
     "desktopctrl": {
-      "command": "/home/projects/personal/desktopctrl/mcp/.venv/bin/python",
-      "args": ["/home/projects/personal/desktopctrl/mcp/desktopctrl_mcp.py"],
+      "command": "/home/projects/personal/desktopctrl/mcp/run.sh",
       "env": { "DESKTOPCTRL_BIN": "/home/sergiom/.local/bin/desktopctrl" }
     }
   }

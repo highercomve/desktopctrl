@@ -52,7 +52,10 @@ cd desktopctrl
 3. set up **rootless** `ydotoold`: install a udev rule for `/dev/uinput`, add you
    to the `input` group, load the `uinput` module,
 4. install + enable a **`systemd --user`** service so `ydotoold` starts with your
-   session.
+   session,
+5. install the **desktop-control agent skill** to `~/.agents/skills/desktop-control`
+   and symlink it into every detected AI agent's skills dir (Claude Code, opencode,
+   Cursor, …).
 
 Flags: `--cli-only` (just deps + symlink), `--no-systemd`, `--no-rootless`.
 
@@ -117,11 +120,19 @@ desktopctrl type 'http://...' ; desktopctrl key Return
 SHOT=$(desktopctrl screenshot)           # then view "$SHOT" to verify
 ```
 
+## Agent skill
+
+[`skill/`](skill/) is a portable "desktop-control" skill that teaches an AI agent
+how to use `desktopctrl` correctly (sandbox/daemon requirements, the coordinate
+model, finding targets, the command reference). `install.sh` places it at
+`~/.agents/skills/desktop-control` and symlinks it into each detected agent.
+
 ## MCP server
 
 [`mcp/`](mcp/) is a FastMCP server exposing the CLI as MCP tools (screenshots
-return images). See [mcp/README.md](mcp/README.md) for setup and Claude Code
-registration.
+return images). It self-bootstraps — point your MCP client at
+[`mcp/run.sh`](mcp/run.sh), which creates a venv, installs deps, and runs the
+server. See [mcp/README.md](mcp/README.md).
 
 ## Repository layout
 
@@ -130,7 +141,8 @@ bin/desktopctrl           the CLI
 install.sh                installer / environment setup
 systemd/ydotoold.service  systemd --user unit for the daemon
 udev/99-uinput.rules      rootless /dev/uinput access
-mcp/                      FastMCP server + requirements + docs
+skill/SKILL.md            agent skill (installed to ~/.agents/skills)
+mcp/                      FastMCP server (run.sh bootstraps venv + deps)
 ```
 
 ## Troubleshooting
